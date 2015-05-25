@@ -1,0 +1,70 @@
+-module (map_reduce).
+-compile (export_all).
+
+map_reduce_seq(Map, Reduce, Input) ->
+    Mapped = [{K2, V2} || {K, V} <- Input, {K2, V2} <- Map(K,V)],
+    reduce_seq(Reduce, Mapped).
+
+reduce_seq(Reduce, KVs) ->
+    [KV || {K, Vs} <- group(lists:sort(KVs)), KV <-Reduce (K, Vs)].
+
+group([]) ->
+    [];
+group([{K, V} | Rest]) ->
+    group(K, [V], Rest).
+
+group(K, Vs, [{K,V} | Rest]) ->
+    group(K, [V|Vs], Rest);
+group(K, Vs, Rest) ->
+    [{K, lists:reverse(Vs)} | group(Rest)].
+
+map_reduce_par(Map, M, Reduce, R, Input) ->
+    S = self(),
+    Splits = split_into(M, Input),
+    Nodes = nodes(),
+    %Mappers = [spawn_mapper(S, Map, R, Split) || Split <- Splits], 
+    Mappers = [spawn_node_mapper(S, Map, R, Split, Node) 
+    	       || Split <- Splits, Node <- Nodes],
+    Mappeds = [receive {Pid, L} -> L end || Pid <- Mappers],
+    Reducers =
+	[spawn_reducer(S, Reduce, I, Mappeds) || I <- lists:seq(0, R-1)],
+    Reduceds = 
+	[receive {Pid, L} -> L end || Pid <- Reducers],
+    lists:sort(lists:flatten(Reduceds)).
+
+spawn_mapper(Parent, Map, R, Split) ->
+    spawn_link(fun() ->
+		       Mapped = [{erlang:phash2(K2,R), {K2, V2}}
+				 || {K, V} <- Split,
+				    {K2, V2} <- Map(K, V)],
+		       Parent ! 
+			   {self(), group(lists:sort(Mapped))}
+	       end).
+
+spawn_node_mapper(Parent, Map, R, Split, Node) ->
+    rpc:call(Node, ?MODULE, spawn_mapper, [Parent, Map, R, Split]).
+
+spawn_reducer(Parent, Reduce, I, Mappeds) ->
+    Inputs = [KV || Mapped <- Mappeds,
+		    {J, KVs} <- Mapped,
+		    I==J,
+		    KV <- KVs],
+    spawn_link(fun() ->
+		       Parent ! {self(), reduce_seq(Reduce, Inputs)}
+	       end).
+
+split_into(N, L) ->
+    split_into(N, L, length(L)).
+
+split_into(1, L, _) ->
+    [L];
+split_into(N, L, Len) ->
+    {Pre, Suf} = lists:split(Len div N, L),
+    [Pre | split_into(N-1, Suf, Len-(Len div N))].
+
+
+
+
+
+
+   

@@ -1,0 +1,16 @@
+-module (testingNodes).
+-compile(export_all).
+
+answerToMe() ->
+    S = self(),
+    Nodes = nodes(),
+    [spawn_node_worker(S, fun simplePrint/1, Node)||Node <- Nodes]
+
+
+spawn_node_worker(Parent, Fun, Node)->
+    spawn_link(Node, Fun(Parent)).
+
+simplePrint(Parent) ->
+    receive
+	Any -> io:format("Hej")
+    end.
